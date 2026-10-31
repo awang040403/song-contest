@@ -1,0 +1,35 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+  <meta name="theme-color" content="#5b5bd6" />
+  <title>吨 · 百业歌唱比赛</title>
+  <link rel="stylesheet" href="styles.css" />
+</head>
+<body>
+  <div class="app">
+    <div class="topbar">
+      <div class="title">🎤 吨 · 百业歌唱比赛</div>
+      <div class="who" id="who"></div>
+    </div>
+
+    <div class="wrap" id="view"><!-- pages render here --></div>
+
+    <div class="tabbar" id="tabbar">
+      <button data-tab="home" class="active"><span class="ic">🏠</span>首页</button>
+      <button data-tab="signup"><span class="ic">📝</span>报名</button>
+      <button data-tab="contestants"><span class="ic">👥</span>选手</button>
+      <button data-tab="results"><span class="ic">🏆</span>成绩</button>
+      <button data-tab="me"><span class="ic">👤</span>我的</button>
+    </div>
+  </div>
+
+  <div id="modal-root"></div>
+
+  <script src="config.js"></script>
+  <script src="db.js"></script>
+  <script src="score.js"></script>
+  <script src="app.js"></script>
+</body>
+</html>
