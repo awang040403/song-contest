@@ -2,7 +2,6 @@
 (() => {
   const cfg = window.APP_CONFIG || {};
   const JUDGES = cfg.JUDGES || [];
-  const DIMS = cfg.DIMENSIONS || [];
 
   const view = document.getElementById('view');
   const whoEl = document.getElementById('who');
@@ -73,8 +72,10 @@
 
   // ---------- data cache + fetch ----------
   async function fetchAll() {
-    const [contestants, scores] = await Promise.all([DB.listContestants(), DB.listScores()]);
-    return { contestants, scores };
+    const [contestants, scores, round] = await Promise.all([
+      DB.listContestants(), DB.listScores(), DB.getCurrentRound()
+    ]);
+    return { contestants, scores, round };
   }
 
   // ============================ VIEWS ============================
@@ -111,8 +112,8 @@
       <div class="card hero">
         <div class="hero-top">
           <div>
-            <div class="hero-title">🎤 吨 · 百业歌唱比赛</div>
-            <div class="hero-sub">报名 · 评委打分 · 自动统计成绩</div>
+            <div class="hero-title">🎤 吨吨好声音</div>
+            <div class="hero-sub">吨百业 主办 · 报名 · 评委打分 · 自动统计成绩</div>
           </div>
           ${userChip}
         </div>
@@ -120,7 +121,7 @@
       <div class="card stats">
         <div class="stat"><div class="stat-num" id="s-contestants">–</div><div class="stat-label">报名选手</div></div>
         <div class="stat"><div class="stat-num">${JUDGES.length}</div><div class="stat-label">评委人数</div></div>
-        <div class="stat"><div class="stat-num" id="s-scored">–</div><div class="stat-label">已出成绩</div></div>
+        <div class="stat"><div class="stat-num" id="s-round">–</div><div class="stat-label">当前阶段</div></div>
       </div>
       <div class="menu-item" data-go="signup">
         <div class="menu-icon">📝</div>
@@ -138,8 +139,14 @@
         <div class="menu-arrow">›</div>
       </div>
       <div class="card">
-        <div class="section-title">计分规则</div>
-        <div class="muted">共 ${JUDGES.length} 位评委打分，每位满分 100。全部评委打完后，去掉一个最高分和一个最低分，取剩余平均分作为最终成绩。</div>
+        <div class="section-title">赛制与计分规则</div>
+        <div class="muted">
+          三轮淘汰制：<b>第一轮</b>全部选手打分，得分前 10 名晋级；<b>第二轮</b> 10 进 5；<b>决赛</b> 5 人决出 1–5 名。<br/>
+          每轮每位评委给 <b>${cfg.SCORE_MIN}–${cfg.SCORE_MAX}</b> 分，去掉一个最高分和一个最低分，取剩余平均分为该选手本轮成绩。每轮分数独立。
+        </div>
+      </div>
+      <div class="card" style="text-align:center">
+        <div class="muted">本活动由 <b style="color:var(--brand)">吨百业</b> 主办</div>
       </div>`;
 
     const hu = document.getElementById('hero-user'); if (hu) hu.onclick = () => go('me');
@@ -148,14 +155,12 @@
 
     // Fill stats asynchronously so the page paints instantly.
     try {
-      const { contestants, scores } = await fetchAll();
-      const grouped = Scoring.groupScores(scores);
-      const scored = contestants.filter((c) => Scoring.computeFinal(grouped[c.id]).final !== null).length;
+      const { contestants, round } = await fetchAll();
       const a = document.getElementById('s-contestants'); if (a) a.textContent = contestants.length;
-      const b = document.getElementById('s-scored'); if (b) b.textContent = scored;
+      const b = document.getElementById('s-round'); if (b) b.textContent = Scoring.roundName(round);
     } catch (e) {
       const a = document.getElementById('s-contestants'); if (a) a.textContent = '0';
-      const b = document.getElementById('s-scored'); if (b) b.textContent = '0';
+      const b = document.getElementById('s-round'); if (b) b.textContent = '第一轮';
     }
   }
 
@@ -235,19 +240,26 @@
     view.innerHTML = `<div class="empty">加载中…</div>`;
     try {
       const u = getUser();
-      const { contestants, scores } = await fetchAll();
+      const { contestants, scores, round } = await fetchAll();
       const grouped = Scoring.groupScores(scores);
       if (!contestants.length) {
         view.innerHTML = cloudNotice() + `<div class="empty"><div style="font-size:48px">🎵</div>还没有选手报名<br/><button class="btn btn-ghost btn-sm" style="margin-top:14px" id="go-signup">去报名</button></div>`;
         const b = document.getElementById('go-signup'); if (b) b.onclick = () => go('signup');
         return;
       }
-      const rows = contestants.map((c) => {
-        const r = Scoring.computeFinal(grouped[c.id]);
+      const roundName = Scoring.roundName(round);
+      // Contestants still in the current round come first; eliminated ones after.
+      const inRound = contestants.filter((c) => (c.advanced_to || 1) >= round);
+      const out = contestants.filter((c) => (c.advanced_to || 1) < round);
+
+      function rowHTML(c, eliminated) {
+        const seatMap = grouped[c.id] && grouped[c.id][round];
+        const r = Scoring.computeRound(seatMap);
         const canDelete = !!(u && c.owner_token && u.token === c.owner_token);
-        const statusText = r.submitted === 0 ? '未打分' : (r.submitted < r.judgeCount ? `打分中 ${r.submitted}/${r.judgeCount}` : '已完成');
-        const statusCls = r.submitted === 0 ? 'none' : (r.submitted < r.judgeCount ? 'ing' : 'done');
-        return `<div class="card">
+        const statusText = eliminated ? '已淘汰'
+          : (r.submitted === 0 ? '未打分' : (r.submitted < r.judgeCount ? `打分中 ${r.submitted}/${r.judgeCount}` : '已完成'));
+        const statusCls = eliminated ? 'none' : (r.submitted === 0 ? 'none' : (r.submitted < r.judgeCount ? 'ing' : 'done'));
+        return `<div class="card" ${eliminated ? 'style="opacity:.55"' : ''}>
           <div class="contestant">
             <div class="num">${c.number}</div>
             <div class="c-info">
@@ -255,17 +267,25 @@
               <div class="c-song">《${esc(c.song)}》 · ${esc(c.language)}</div>
             </div>
             <div class="c-score">
-              ${r.final !== null ? `<div class="num-big">${r.final}</div>` : ''}
+              ${(!eliminated && r.final !== null) ? `<div class="num-big">${r.final}</div>` : ''}
               <div class="status ${statusCls}">${statusText}</div>
             </div>
           </div>
           <div class="row-actions">
             ${canDelete ? `<a class="danger" data-del="${c.id}">删除报名</a>` : ''}
-            <a data-judge="${c.id}">打分 ›</a>
+            ${eliminated ? '' : `<a data-judge="${c.id}">打分 ›</a>`}
           </div>
         </div>`;
-      }).join('');
-      view.innerHTML = cloudNotice() + `<div class="grid-list">${rows}</div>`;
+      }
+
+      const inHTML = inRound.map((c) => rowHTML(c, false)).join('');
+      const outHTML = out.length
+        ? `<div class="section-title span-all" style="margin-top:6px">已淘汰</div>` + out.map((c) => rowHTML(c, true)).join('')
+        : '';
+
+      view.innerHTML = cloudNotice() +
+        `<div class="banner">当前：${roundName} · 共 ${inRound.length} 位选手</div>` +
+        `<div class="grid-list">${inHTML}${outHTML}</div>`;
 
       view.querySelectorAll('[data-judge]').forEach((a) => a.onclick = () => go('judge', a.dataset.judge));
       view.querySelectorAll('[data-del]').forEach((a) => a.onclick = () => {
@@ -302,85 +322,83 @@
 
     view.innerHTML = `<div class="empty">加载中…</div>`;
     try {
-      const [contestants, scoreRows] = await Promise.all([DB.listContestants(), DB.listScoresFor(contestantId)]);
+      const [contestants, scoreRows, round] = await Promise.all([
+        DB.listContestants(), DB.listScoresFor(contestantId), DB.getCurrentRound()
+      ]);
       const c = contestants.find((x) => x.id === contestantId);
       if (!c) { view.innerHTML = `<div class="empty">未找到该选手</div>`; return; }
 
-      const seatMap = {}; scoreRows.forEach((s) => (seatMap[s.seat] = s));
+      const roundName = Scoring.roundName(round);
+
+      // Contestant must still be in the current round to be scored.
+      if ((c.advanced_to || 1) < round) {
+        view.innerHTML = `<div class="empty"><div style="font-size:48px">🚫</div>「${esc(c.name)}」已在上一轮被淘汰，${roundName}不可打分。<br/><button class="btn btn-ghost btn-sm" style="margin-top:14px" id="j-back">返回</button></div>`;
+        document.getElementById('j-back').onclick = () => go('contestants');
+        return;
+      }
+
+      // Only this round's scores matter here.
+      const seatMap = {};
+      scoreRows.forEach((s) => { if ((s.round || 1) === round) seatMap[s.seat] = s; });
       const mine = seatMap[mySeat] || null;
       const submitted = !!mine;
-      const dims = (mine && mine.dims) || {};
-      const final = Scoring.computeFinal(seatMap);
+      const myVal = mine && mine.value !== undefined && mine.value !== null ? mine.value : '';
+      const final = Scoring.computeRound(seatMap);
 
       const seatsHTML = JUDGES.map((j) => {
         const e = seatMap[j.seat];
         const cls = (j.seat === mySeat ? 'mine ' : '') + (e ? 'scored' : '');
-        return `<div class="seat ${cls}"><div class="s-label">${j.seat + 1}号${j.seat === mySeat ? '（我）' : ''}</div><div class="s-sub">${e ? e.total + '分' : '未打'}</div></div>`;
+        return `<div class="seat ${cls}"><div class="s-label">${esc(j.name)}${j.seat === mySeat ? '（我）' : ''}</div><div class="s-sub">${e ? e.value + '分' : '未打'}</div></div>`;
       }).join('');
 
-      const dimHTML = DIMS.map((d) => `
-        <div class="dim">
-          <div><span class="d-label">${esc(d.label)}</span><span class="d-max">/ ${d.max}</span></div>
-          <input type="number" inputmode="numeric" data-dim="${d.key}" data-max="${d.max}" ${submitted ? 'disabled' : ''} value="${typeof dims[d.key] === 'number' ? dims[d.key] : ''}" placeholder="0" />
-        </div>`).join('');
-
       view.innerHTML = `
-        <div class="banner">${mySeat + 1}号评委 · ${esc(u.name)}</div>
-        <div class="card" style="background:linear-gradient(135deg,var(--brand),var(--brand-2));color:#fff;">
-          <div style="font-size:19px;font-weight:800;">${c.number}. ${esc(c.name)}</div>
-          <div class="muted" style="color:rgba(255,255,255,.92)">《${esc(c.song)}》 · ${esc(c.language)}</div>
-          ${final.final !== null ? `<div style="margin-top:8px;font-size:13px;">当前成绩 <b style="font-size:20px">${final.final}</b> <span style="opacity:.85">（${final.submitted}/${final.judgeCount} 评委）</span></div>` : ''}
+        <div class="banner">${roundName} · ${esc(u.name)}（${mySeat + 1}号评委）</div>
+        <div class="card hero">
+          <div style="font-size:19px;font-weight:800;position:relative;z-index:1">${c.number}. ${esc(c.name)}</div>
+          <div class="muted" style="color:rgba(255,255,255,.92);position:relative;z-index:1">《${esc(c.song)}》 · ${esc(c.language)}</div>
+          ${final.final !== null ? `<div style="margin-top:8px;font-size:13px;position:relative;z-index:1">本轮成绩 <b style="font-size:20px">${final.final}</b> <span style="opacity:.85">（${final.submitted}/${final.judgeCount} 评委）</span></div>` : ''}
         </div>
         <div class="card">
-          <div class="section-title">评委打分进度</div>
+          <div class="section-title">本轮评委打分进度</div>
           <div class="seats">${seatsHTML}</div>
-          <div class="muted" style="margin-top:12px">你只能查看并编辑自己（${mySeat + 1}号）的打分，其他评委的分数不可更改。</div>
+          <div class="muted" style="margin-top:12px">你只能查看并编辑自己的打分，其他评委的分数不可更改。</div>
         </div>
         <div class="card">
-          <div class="section-title">我的打分（${mySeat + 1}号 · 满分 100）${submitted ? '<span class="locked-tag">已锁定</span>' : ''}</div>
-          ${dimHTML}
-          <div class="total-row"><span>合计</span><span class="big" id="j-total">0</span></div>
+          <div class="section-title">我的打分 · ${roundName}（${cfg.SCORE_MIN}–${cfg.SCORE_MAX} 分）${submitted ? '<span class="locked-tag">已锁定</span>' : ''}</div>
+          <div class="dim" style="border-bottom:none">
+            <div><span class="d-label">评分</span><span class="d-max">${cfg.SCORE_MIN} – ${cfg.SCORE_MAX}</span></div>
+            <input id="j-score" type="number" inputmode="decimal" step="0.1" ${submitted ? 'disabled' : ''} value="${myVal}" placeholder="${cfg.SCORE_MIN}-${cfg.SCORE_MAX}" />
+          </div>
           ${submitted
-            ? `<div class="locked-box">✓ 你已提交并锁定，分数不可修改。</div>`
+            ? `<div class="locked-box" style="margin-top:12px">✓ 你已提交并锁定，分数不可修改。</div>`
             : `<button class="btn btn-primary" id="j-submit">提交我的打分</button><div class="muted" style="text-align:center;margin-top:8px">提交后将锁定，不能再修改。</div>`}
         </div>
-        ${final.final !== null ? `<button class="btn btn-ghost" id="j-results">查看成绩排行 ›</button>` : ''}`;
-
-      function recalc() {
-        let t = 0;
-        view.querySelectorAll('[data-dim]').forEach((inp) => { const n = Number(inp.value); if (!isNaN(n)) t += n; });
-        const el = document.getElementById('j-total'); if (el) el.textContent = Scoring.round2(t);
-      }
-      view.querySelectorAll('[data-dim]').forEach((inp) => {
-        inp.oninput = recalc;
-        inp.onblur = () => {
-          if (inp.value === '') return;
-          let n = Number(inp.value); const max = Number(inp.dataset.max);
-          if (isNaN(n)) n = 0; n = Math.max(0, Math.min(max, Math.round(n)));
-          inp.value = n; recalc();
-        };
-      });
-      recalc();
+        <button class="btn btn-ghost" id="j-results">查看成绩排行 ›</button>`;
 
       const rb = document.getElementById('j-results'); if (rb) rb.onclick = () => go('results');
 
+      const inp = document.getElementById('j-score');
+      if (inp && !submitted) {
+        inp.onblur = () => {
+          if (inp.value === '') return;
+          let n = Number(inp.value);
+          if (isNaN(n)) { inp.value = ''; return; }
+          n = Math.max(cfg.SCORE_MIN, Math.min(cfg.SCORE_MAX, n));
+          inp.value = n;
+        };
+      }
+
       const sb = document.getElementById('j-submit');
       if (sb) sb.onclick = () => {
-        const dimsOut = {}; let total = 0; let ok = true;
-        view.querySelectorAll('[data-dim]').forEach((inp) => {
-          const max = Number(inp.dataset.max);
-          if (inp.value === '' || isNaN(Number(inp.value))) ok = false;
-          let n = Math.max(0, Math.min(max, Math.round(Number(inp.value) || 0)));
-          dimsOut[inp.dataset.dim] = n; total += n;
-        });
-        if (!ok) return toast('请填写所有评分项');
-        total = Scoring.round2(total);
+        if (inp.value === '' || isNaN(Number(inp.value))) return toast(`请填写 ${cfg.SCORE_MIN}-${cfg.SCORE_MAX} 的分数`);
+        let v = Math.max(cfg.SCORE_MIN, Math.min(cfg.SCORE_MAX, Number(inp.value)));
+        v = Math.round(v * 10) / 10; // allow one decimal
         modal({
           title: '确认提交',
-          bodyHTML: '<div class="muted">分数提交后将锁定，不能再修改。确定提交？</div>',
+          bodyHTML: `<div class="muted">你给「${esc(c.name)}」打 <b>${v}</b> 分（${roundName}）。提交后将锁定，不能再修改。</div>`,
           onConfirm: async (close) => {
             try {
-              await DB.submitScore(contestantId, mySeat, dimsOut, total, u.name);
+              await DB.submitScore(contestantId, mySeat, round, v, u.name);
               close(); toast('提交成功'); renderJudge(contestantId);
             } catch (e) {
               close();
@@ -395,46 +413,97 @@
     }
   }
 
-  // ---- Results ----
+  // ---- Results (multi-round) ----
   async function renderResults() {
     view.innerHTML = `<div class="empty">加载中…</div>`;
     try {
-      const { contestants, scores } = await fetchAll();
-      const rows = Scoring.leaderboard(contestants, scores);
-      if (!rows.length) { view.innerHTML = cloudNotice() + `<div class="empty"><div style="font-size:48px">🏆</div>暂无成绩</div>`; return; }
-      const complete = rows.filter((r) => r.complete && r.final !== null);
-      const champ = complete[0] || null;
+      const { contestants, scores, round } = await fetchAll();
+      if (!contestants.length) { view.innerHTML = cloudNotice() + `<div class="empty"><div style="font-size:48px">🏆</div>暂无成绩</div>`; return; }
 
-      const champHTML = champ
-        ? `<div class="card champion span-all"><div class="crown">👑</div><div class="c-title">冠军</div><div class="c-name">${esc(champ.name)}</div><div class="muted" style="color:rgba(255,255,255,.95)">《${esc(champ.song)}》 · ${esc(champ.language)}</div><div class="c-score">${champ.final} 分</div></div>`
-        : `<div class="card span-all"><div class="muted">还没有选手完成全部 ${Scoring.JUDGE_COUNT} 位评委的打分，暂未产生冠军。下方为当前进度。</div></div>`;
+      const ROUNDS = Scoring.ROUNDS;
+      const lastRoundKey = ROUNDS[ROUNDS.length - 1].key;
 
-      const listHTML = rows.map((r) => `
-        <div class="card rank">
-          <div class="rank-badge r${r.rank || 0}">${r.rank === null ? '-' : r.rank}</div>
-          <div class="c-info">
-            <div class="c-name">${esc(r.name)}</div>
-            <div class="c-song">《${esc(r.song)}》 · ${esc(r.language)}</div>
-            ${!r.complete ? `<div class="muted" style="font-size:12px">打分进度 ${r.submitted}/${r.judgeCount}</div>` : ''}
-          </div>
-          <div class="c-score">${r.final !== null ? `<div class="num-big">${r.final}</div>` : '<div class="muted">未出分</div>'}</div>
-        </div>`).join('');
+      // Champion = #1 of the final round, only once the final round is complete.
+      let champHTML = '';
+      const finalRows = Scoring.leaderboard(contestants, scores, lastRoundKey);
+      const finalComplete = finalRows.length > 0 && finalRows.every((r) => r.complete);
+      if (round >= lastRoundKey && finalComplete && finalRows[0] && finalRows[0].final !== null) {
+        const champ = finalRows[0];
+        champHTML = `<div class="card champion span-all"><div class="crown">👑</div><div class="c-title">总冠军</div><div class="c-name">${esc(champ.name)}</div><div class="muted" style="color:rgba(255,255,255,.95)">《${esc(champ.song)}》 · ${esc(champ.language)}</div><div class="c-score">${champ.final} 分</div></div>`;
+      }
+
+      // Build a section for each round that has started (round key <= current).
+      let sections = '';
+      ROUNDS.forEach((rd) => {
+        if (rd.key > round) return; // round not started yet
+        const rows = Scoring.leaderboard(contestants, scores, rd.key);
+        if (!rows.length) return;
+        const isCurrent = rd.key === round;
+        const tag = isCurrent ? '<span class="pill" style="margin-left:8px">进行中</span>' : '';
+        const listHTML = rows.map((r) => {
+          // Highlight who advanced (top N) in rounds that have an advance cutoff.
+          const advanced = rd.advance > 0 && r.rank !== null && r.rank <= rd.advance;
+          return `<div class="card rank">
+            <div class="rank-badge r${r.rank || 0}">${r.rank === null ? '-' : r.rank}</div>
+            <div class="c-info">
+              <div class="c-name">${esc(r.name)} ${advanced ? '<span class="pill ok" style="margin-left:6px">晋级</span>' : ''}</div>
+              <div class="c-song">《${esc(r.song)}》 · ${esc(r.language)}</div>
+              ${!r.complete ? `<div class="muted" style="font-size:12px">打分进度 ${r.submitted}/${r.judgeCount}</div>` : ''}
+            </div>
+            <div class="c-score">${r.final !== null ? `<div class="num-big">${r.final}</div>` : '<div class="muted">未出分</div>'}</div>
+          </div>`;
+        }).join('');
+        sections += `<div class="section-title span-all" style="margin-top:6px">${rd.name}排名 ${tag}</div>` + listHTML;
+      });
+
+      // Admin "next round" button for the current round (if not the last round).
+      const curDef = Scoring.roundDef(round);
+      const canAdvance = curDef && curDef.advance > 0;
+      const adminHTML = `
+        <div class="card span-all" style="background:#f6f7fe">
+          <div class="section-title">管理员</div>
+          ${canAdvance
+            ? `<div class="muted" style="margin-bottom:10px">当前为 <b>${Scoring.roundName(round)}</b>。全部选手打分完成后，点击下方按钮，<b>得分前 ${curDef.advance} 名</b>晋级到下一轮，其余淘汰。</div>
+               <button class="btn btn-primary" id="r-next">进入下一轮（保留前 ${curDef.advance} 名）</button>`
+            : `<div class="muted" style="margin-bottom:10px">当前为最后一轮 <b>${Scoring.roundName(round)}</b>，排名即为最终名次。</div>`}
+          <button class="btn btn-danger-ghost" id="r-reset">清空所有数据</button>
+        </div>`;
 
       view.innerHTML = cloudNotice() +
-        `<div class="grid-list">
-          ${champHTML}
-          <div class="section-title span-all" style="padding:0 4px">完整排名</div>
-          ${listHTML}
-          <button class="btn btn-ghost span-all" id="r-reset">清空所有数据</button>
-        </div>`;
+        `<div class="banner">当前阶段：${Scoring.roundName(round)}</div>` +
+        `<div class="grid-list">${champHTML}${sections}${adminHTML}</div>`;
+
+      // Advance round (admin-gated).
+      const nextBtn = document.getElementById('r-next');
+      if (nextBtn) nextBtn.onclick = () => {
+        const rows = Scoring.leaderboard(contestants, scores, round);
+        const allComplete = rows.length > 0 && rows.every((r) => r.complete);
+        const survivors = rows.filter((r) => r.rank !== null && r.rank <= curDef.advance);
+        const survivorIds = survivors.map((r) => r.id);
+        const nextKey = round + 1;
+
+        modal({
+          title: `进入${Scoring.roundName(nextKey)}`,
+          bodyHTML:
+            `<div class="muted">将把<b> ${Scoring.roundName(round)} </b>得分前 <b>${curDef.advance}</b> 名晋级到 <b>${Scoring.roundName(nextKey)}</b>，其余选手淘汰。此操作不可撤销。</div>` +
+            (allComplete ? '' : `<div class="notice" style="margin-top:10px">⚠️ 还有选手未完成本轮全部评委打分，现在晋级可能不准确。建议打完再操作。</div>`) +
+            `<div style="margin-top:10px"><b>晋级名单：</b>${survivors.map((s) => esc(s.name)).join('、') || '（无）'}</div>` +
+            `<input id="adv-code" type="password" style="margin-top:12px" placeholder="管理员口令" />`,
+          confirmText: '确认晋级',
+          onConfirm: async (close) => {
+            if (document.getElementById('adv-code').value !== cfg.ADMIN_CODE) { toast('口令不正确'); return; }
+            try { await DB.advanceRound(nextKey, survivorIds); close(); toast(`已进入${Scoring.roundName(nextKey)}`); renderResults(); }
+            catch (e) { close(); toast('操作失败：' + e.message); }
+          }
+        });
+      };
 
       document.getElementById('r-reset').onclick = () => {
         modal({
           title: '清空所有数据', danger: true, confirmText: '清空',
-          bodyHTML: `<div class="muted">将删除全部选手与打分，且不可恢复。请输入管理员口令：</div><input id="reset-code" type="password" style="margin-top:10px" placeholder="管理员口令" />`,
+          bodyHTML: `<div class="muted">将删除全部选手与打分、并回到第一轮，且不可恢复。请输入管理员口令：</div><input id="reset-code" type="password" style="margin-top:10px" placeholder="管理员口令" />`,
           onConfirm: async (close) => {
-            const code = document.getElementById('reset-code').value;
-            if (code !== cfg.ADMIN_CODE) { toast('口令不正确'); return; }
+            if (document.getElementById('reset-code').value !== cfg.ADMIN_CODE) { toast('口令不正确'); return; }
             try { await DB.resetAll(); close(); toast('已清空'); renderResults(); }
             catch (e) { close(); toast('清空失败：' + e.message); }
           }
@@ -479,8 +548,9 @@
       </div>
       <div class="card credit">
         <div class="section-title">关于</div>
-        <div class="muted credit-line">本小程序由 <span class="name">明明</span> 制作，版权归 明明 所有。</div>
-        <div class="muted credit-line">如果有小程序问题，请联系明明。</div>
+        <div class="muted credit-line"><b>吨吨好声音</b> 由 <span class="name">吨百业</span> 主办。</div>
+        <div class="muted credit-line">本应用由 <span class="name">明明</span> 制作，版权归 明明 所有。</div>
+        <div class="muted credit-line">如果有应用/技术问题，请联系明明。</div>
         <div class="muted credit-line">如果有报名/成绩相关问题，请联系阿鱼。</div>
       </div>`;
 

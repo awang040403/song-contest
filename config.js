@@ -25,24 +25,29 @@ window.APP_CONFIG = {
   // Shared code judges must enter to unlock scoring.
   JUDGE_CODE: 'dun-judge-8823',
 
-  // Admin code required to wipe all data on the results page.
+  // Admin code required to advance rounds / wipe data.
   ADMIN_CODE: 'dun-admin-7731',
 
   // Judges: each name maps to a fixed seat. A judge may ONLY edit their own
-  // seat, and cannot edit after submitting.
+  // seat's score, and cannot edit after submitting.
   JUDGES: [
-    { name: 'herring', seat: 0 },
-    { name: '索隆', seat: 1 },
-    { name: 'Claire', seat: 2 },
-    { name: 'thinkerz', seat: 3 },
-    { name: '青', seat: 4 }
+    { name: '阿鱼', seat: 0 },
+    { name: '喵酱', seat: 1 },
+    { name: '亲舞', seat: 2 },
+    { name: '哈啤酒', seat: 3 },
+    { name: '谢青', seat: 4 }
   ],
 
-  // Scoring dimensions, each out of its max. Totals should sum to 100.
-  DIMENSIONS: [
-    { key: 'vocal', label: '音准/唱功', max: 40 },
-    { key: 'emotion', label: '情感表达', max: 30 },
-    { key: 'stage', label: '台风表现', max: 20 },
-    { key: 'overall', label: '综合印象', max: 10 }
+  // ===== Tournament rounds =====
+  // Each judge gives a single 1-10 score per contestant per round.
+  // 5 judges -> drop highest + lowest -> average the middle 3 = round score.
+  // advance = how many top contestants move on when the admin clicks 下一轮.
+  // The last round has advance = 0 (no further round; produces final rank).
+  SCORE_MIN: 1,
+  SCORE_MAX: 10,
+  ROUNDS: [
+    { key: 1, name: '第一轮', advance: 10 }, // all signups -> top 10
+    { key: 2, name: '第二轮', advance: 5 },  // 10 -> top 5
+    { key: 3, name: '决赛',   advance: 0 }   // 5 -> final rank 1-5
   ]
 };
